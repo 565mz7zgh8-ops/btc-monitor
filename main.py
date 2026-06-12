@@ -5,7 +5,7 @@ import time
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-ALERT_PRICE = 110000
+ALERT_PRICE = 11
 sent = False
 
 while True:
