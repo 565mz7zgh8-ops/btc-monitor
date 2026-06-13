@@ -1,70 +1,51 @@
 import os
 import time
-import requests
 import traceback
+import requests
 import pandas as pd
 import numpy as np
+import yfinance as yf
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 
 def send_telegram(msg):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-    requests.post(
-        url,
-        json={
-            "chat_id": CHAT_ID,
-            "text": msg
-        },
-        timeout=20
-    )
+        requests.post(
+            url,
+            json={
+                "chat_id": CHAT_ID,
+                "text": msg
+            },
+            timeout=20
+        )
+    except Exception as e:
+        print("Telegram发送失败:", e)
 
 
-def get_klines(symbol="BTCUSDT", interval="60", limit=100):
+def get_klines():
+    try:
+        df = yf.download(
+            "BTC-USD",
+            interval="1h",
+            period="7d",
+            progress=False,
+            auto_adjust=False
+        )
 
-    r = requests.get(
-        "https://api.bybit.com/v5/market/kline",
-        params={
-            "category": "linear",
-            "symbol": symbol,
-            "interval": interval,
-            "limit": limit
-        },
-        timeout=20
-    )
+        if df.empty:
+            raise Exception("Yahoo返回空数据")
 
-    data = r.json()
+        df = df.rename(columns=str.lower)
 
-    if data["retCode"] != 0:
-        raise Exception(f"Bybit错误: {data}")
+        return df
 
-    rows = data["result"]["list"]
-
-    if not rows:
-        raise Exception("Bybit返回空数据")
-
-    df = pd.DataFrame(
-        rows,
-        columns=[
-            "startTime",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-            "turnover"
-        ]
-    )
-
-    # Bybit返回倒序
-    df = df.iloc[::-1].reset_index(drop=True)
-
-    for c in ["open", "high", "low", "close", "volume"]:
-        df[c] = df[c].astype(float)
-
-    return df
+    except Exception as e:
+        print("获取行情失败:", e)
+        raise
 
 
 def calc_macd(df, fast=12, slow=26, signal=9):
@@ -74,11 +55,10 @@ def calc_macd(df, fast=12, slow=26, signal=9):
     macd = ema_fast - ema_slow
     sig = macd.ewm(span=signal).mean()
 
-    return macd.iloc[-1] - sig.iloc[-1]
+    return float(macd.iloc[-1] - sig.iloc[-1])
 
 
 def calc_cmf(df, period=20):
-
     mfm = (
         ((df["close"] - df["low"]) -
          (df["high"] - df["close"]))
@@ -90,31 +70,39 @@ def calc_cmf(df, period=20):
 
     mfv = mfm * df["volume"]
 
-    return (
+    cmf = (
         mfv.rolling(period).sum()
         /
         df["volume"].rolling(period).sum()
     ).iloc[-1]
 
+    return float(cmf)
+
 
 def calc_obv_trend(df, n=10):
     direction = np.sign(df["close"].diff()).fillna(0)
+
     obv = (direction * df["volume"]).cumsum()
 
-    return obv.iloc[-1] - obv.iloc[-n]
+    return float(obv.iloc[-1] - obv.iloc[-n])
 
 
 def calc_volatility(df, n=20):
     returns = df["close"].pct_change()
 
-    return returns.rolling(n).std().iloc[-1] * 100
+    return float(
+        returns.rolling(n).std().iloc[-1] * 100
+    )
 
 
 def describe_market():
 
     df = get_klines()
 
-    price = df["close"].iloc[-1]
+    if len(df) < 30:
+        return "⚠️ K线数据不足"
+
+    price = float(df["close"].iloc[-1])
 
     macd_hist = calc_macd(df)
     cmf = calc_cmf(df)
@@ -130,7 +118,9 @@ def describe_market():
     else:
         cmf_desc = f"资金中性 ({cmf:.2f})"
 
-    price_trend = df["close"].iloc[-1] - df["close"].iloc[-10]
+    price_trend = float(
+        df["close"].iloc[-1] - df["close"].iloc[-10]
+    )
 
     if (price_trend > 0 and obv_trend > 0) or \
        (price_trend < 0 and obv_trend < 0):
@@ -147,7 +137,7 @@ def describe_market():
 
     return (
         f"📊 BTC 市场状态\n\n"
-        f"💰 价格: {price:,.0f} USDT\n"
+        f"💰 价格: {price:,.0f} USD\n"
         f"📈 趋势: {macd_desc}\n"
         f"💵 资金流: {cmf_desc}\n"
         f"📦 OBV: {obv_desc}\n"
@@ -157,7 +147,7 @@ def describe_market():
 
 def main_loop():
 
-    send_telegram("🚀 BTC监控器启动成功")
+    send_telegram("🚀 BTC监控机器人启动成功")
 
     while True:
 
@@ -167,7 +157,7 @@ def main_loop():
 
         except Exception:
             send_telegram(
-                "⚠️ 市场分析失败\n\n"
+                "⚠️ 程序异常\n\n"
                 + traceback.format_exc()[:3000]
             )
 
